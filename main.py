@@ -37,11 +37,7 @@ def extract_data(player_url):
 
     # 3) Collect rows for offline tournaments only
     rows = soup.select("table.table--player-results tbody tr")
-    offline_rows = []
-    for r in rows:
-        ev = r.select_one("td.event_name")
-        if ev and "Online" not in ev.get_text():
-            offline_rows.append(r)
+    offline_rows = [r for r in rows if (ev := r.select_one("td.event_name")) and "Online" not in ev.get_text()]
     total_tournaments = len(offline_rows)
 
     # 4) Prepare accumulators
@@ -54,11 +50,9 @@ def extract_data(player_url):
     # 5) Process each offline tournament
     for row in offline_rows:
         # Extract year
-        date_td = row.select_one("td.date")
         year = None
-        if date_td:
-            m_year = re.search(r"(\d{4})", date_td.get_text())
-            if m_year:
+        if (date_td := row.select_one("td.date")):
+            if (m_year := re.search(r"(\d{4})", date_td.get_text())):
                 year = m_year.group(1)
         if year:
             year_counts[year] = year_counts.get(year, 0) + 1
@@ -70,8 +64,7 @@ def extract_data(player_url):
         for a in row.select("td.event_name a"):
             if not a.find('img'):
                 text = a.get_text().strip()
-                match = re.match(r'^[€$0-9\+,\s]+', text)
-                if match:
+                if (match := re.match(r'^[€$0-9\+,\s]+', text)):
                     part = match.group(0)
                     nums = re.findall(r'[0-9][0-9,]*', part)
                     total_val = sum(float(n.replace(',', '')) for n in nums)
@@ -106,10 +99,7 @@ def extract_data(player_url):
                 year_roi_values[year].append(roi)
 
     # 6) Compute overall average ROI
-    if total_tournaments > 0:
-        average_roi = round(sum(overall_roi_values) / total_tournaments, 4)
-    else:
-        average_roi = 0.0
+    average_roi = round(sum(overall_roi_values) / total_tournaments, 4) if total_tournaments else 0.0
 
     # 7) Compute yearly stats sorted descending by year
     yearly_stats = []
@@ -122,14 +112,19 @@ def extract_data(player_url):
             "averageROIByCash": avg
         })
 
-    # 8) Return structured JSON
+    # 8) Build multi-line yearly text
+    yearly_text_lines = [f"{s['year']}: {s['tournaments']} tournaments, avg ROI {s['averageROIByCash']}" for s in yearly_stats]
+    yearly_text = "\n".join(yearly_text_lines)
+
+    # 9) Return structured JSON with yearly text
     return {
         "player": player,
         "totalTournaments": total_tournaments,
         "totalBuyins": total_buyins,
         "totalPrizes": total_prizes,
         "averageROIByCash": average_roi,
-        "yearlyStats": yearly_stats
+        "yearlyStats": yearly_stats,
+        "yearlyStatsText": yearly_text
     }
 
 
@@ -149,6 +144,7 @@ def main_route():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
