@@ -1,56 +1,76 @@
 import os
-import traceback
+import requests
+from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
-from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
-# Health check endpoint
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"status": "OK"}), 200
+SCRAPER_KEY = os.getenv("SCRAPER_API_KEY")
 
-# Main POST endpoint to process profile URL
-@app.route("/", methods=["POST"])
-def parse_profile():
+def parse_money(s: str):
+    # Убираем символы валюты и разделители
     try:
-        data = request.get_json(force=True)
-        print("Request data:", data)
-
-        if not data or "url" not in data:
-            return jsonify({"error": "Missing 'url' in request"}), 400
-
-        url = data["url"]
-        result = extract_data(url)
-        print("Result:", result)
-        return jsonify(result), 200
-
-    except Exception as e:
-        # Log full traceback for debugging
-        tb = traceback.format_exc()
-        print(tb)
-        return jsonify({"error": str(e), "trace": tb}), 500
-
+        return float(s.replace("$","").replace(",","").strip())
+    except:
+        return 0.0
 
 def extract_data(url):
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(url, timeout=60000)
-        page.wait_for_selector("h1", timeout=15000)
+    # 1) Получаем HTML через ScraperAPI
+    resp = requests.get(
+        "https://api.scraperapi.com",
+        params={"api_key": SCRAPER_KEY, "url": url},
+        timeout=30
+    )
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
 
-        name = page.locator("h1").inner_text().strip()
-        try:
-            results_section = page.locator("h4:has-text('Results') + div")
-            results = results_section.inner_text().strip()
-        except Exception:
-            results = "Результаты не найдены"
+    # 2) Имя игрока
+    name = soup.find("h1").get_text(strip=True)
 
-        browser.close()
-        return {"name": name, "raw_results": results}
+    # 3) Собираем все строки результатов из таблицы
+    rows = soup.select("table.results tbody tr")
+    data = []
+    for tr in rows:
+        cols = [td.get_text(strip=True) for td in tr.find_all("td")]
+        # Предположим: [Date, Event, Buy-in, Prize, ROI, ...]
+        if len(cols) >= 4:
+            date, event, buyin, prize = cols[0], cols[1], cols[2], cols[3]
+            data.append({
+                "date": date,
+                "event": event,
+                "buyin": parse_money(buyin),
+                "prize": parse_money(prize),
+            })
+
+    # 4) Считаем метрики
+    total_tournaments = len(data)
+    total_buyin = sum(d["buyin"] for d in data)
+    total_prize = sum(d["prize"] for d in data)
+    avg_roi = (total_prize - total_buyin) / total_buyin if total_buyin else 0.0
+
+    return {
+        "name": name,
+        "total_tournaments": total_tournaments,
+        "total_buyin": total_buyin,
+        "total_prize": total_prize,
+        "average_roi": round(avg_roi, 4)
+    }
+
+@app.route("/", methods=["POST"])
+def main_route():
+    body = request.get_json() or {}
+    url = body.get("url")
+    if not url:
+        return jsonify({"error": "Missing 'url'"}), 400
+    try:
+        result = extract_data(url)
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
