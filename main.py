@@ -1,21 +1,26 @@
 from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
-import re
 
 app = Flask(__name__)
 
 def extract_data(url):
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(url)
-        page.wait_for_selector('div.content')
-        html = page.content()
-        
-        name = page.locator("h1").inner_text().strip()
-        results = page.locator(".col-md-12 h4:has-text('Results') + div").inner_text()
-        browser.close()
+        page.goto(url, timeout=60000)
+        page.wait_for_selector("h1", timeout=15000)
 
+        # Получаем имя игрока
+        name = page.locator("h1").inner_text().strip()
+
+        # Пытаемся найти блок с результатами
+        try:
+            results_section = page.locator("h4:has-text('Results') + div")
+            results = results_section.inner_text().strip()
+        except Exception:
+            results = "Результаты не найдены"
+
+        browser.close()
         return {
             "name": name,
             "raw_results": results
@@ -23,13 +28,15 @@ def extract_data(url):
 
 @app.route("/", methods=["POST"])
 def main():
-    data = request.get_json()
-    url = data.get("url")
-    if not url:
-        return jsonify({"error": "Missing URL"}), 400
     try:
+        data = request.get_json()
+        if not data or "url" not in data:
+            return jsonify({"error": "Missing 'url' in request"}), 400
+
+        url = data["url"]
         result = extract_data(url)
         return jsonify(result)
+
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
