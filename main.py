@@ -36,79 +36,101 @@ def extract_data(player_url):
     player = title_text.split(":", 1)[0].strip()
 
     # 3) Collect rows for offline tournaments only
-    all_rows = soup.select("table.table--player-results tbody tr")
-    offline_rows = [r for r in all_rows
-                    if r.select_one("td.event_name") and "Online" not in r.select_one("td.event_name").get_text()]
+    rows = soup.select("table.table--player-results tbody tr")
+    offline_rows = []
+    for r in rows:
+        ev = r.select_one("td.event_name")
+        if ev and "Online" not in ev.get_text():
+            offline_rows.append(r)
     total_tournaments = len(offline_rows)
 
-    # 4) Aggregate buy-ins, prizes, ROI list
+    # 4) Prepare accumulators
     total_buyins = {}
     total_prizes = {}
-    roi_values = []
+    overall_roi_values = []
+    year_counts = {}
+    year_roi_values = {}
 
+    # 5) Process each offline tournament
     for row in offline_rows:
-        # BUY-IN: extract numeric parts (including parts without currency symbol)
-        event_link = None
-        for a in row.select("td.event_name a"):
-            if not a.find('img'):
-                event_link = a
-                break
+        # Extract year
+        date_td = row.select_one("td.date")
+        year = None
+        if date_td:
+            m_year = re.search(r"(\d{4})", date_td.get_text())
+            if m_year:
+                year = m_year.group(1)
+        # Initialize year stats
+        if year:
+            year_counts[year] = year_counts.get(year, 0) + 1
+            year_roi_values.setdefault(year, [])
 
+        # BUY-IN parsing
         buyin_amount = 0.0
         buyin_currency = None
-        if event_link:
-            text = event_link.get_text().strip()
-            # Determine currency symbol from start
-            if text.startswith('$'):
-                symbol = '$'
-            elif text.startswith('€'):
-                symbol = '€'
-            else:
-                symbol = None
+        # Find event link (text-only)
+        for a in row.select("td.event_name a"):
+            if not a.find('img'):
+                text = a.get_text().strip()
+                # Get leading part
+                match = re.match(r'^[€$0-9\+,\s]+', text)
+                if match:
+                    part = match.group(0)
+                    # sum all numbers
+                    nums = re.findall(r'[0-9][0-9,]*', part)
+                    total_val = sum(float(n.replace(',', '')) for n in nums)
+                    # currency from symbol
+                    if part.startswith('$'):
+                        curr = 'USD'
+                    elif part.startswith('€'):
+                        curr = 'EUR'
+                    else:
+                        curr = None
+                    if curr:
+                        buyin_amount = total_val
+                        buyin_currency = curr
+                        total_buyins[curr] = total_buyins.get(curr, 0.0) + total_val
+                break
 
-            # Extract only the leading part containing currency, digits, plus, commas
-            m = re.match(r'^[€$0-9\+,\s]+', text)
-            if m:
-                part = m.group(0)
-                # Find all numeric values
-                nums = re.findall(r'[0-9][0-9,]*', part)
-                # Sum them, stripping commas
-                total_val = sum(float(n.replace(',', '')) for n in nums)
-                buyin_amount = total_val
-                if symbol:
-                    curr = 'USD' if symbol == '$' else 'EUR'
-                    total_buyins[curr] = total_buyins.get(curr, 0.0) + buyin_amount
-                    buyin_currency = curr
-
-        # PRIZE: match same currency as buy-in
+        # PRIZE parsing
         prize_amount = 0.0
         for cell in row.select("td.currency"):
             txt = cell.get_text(strip=True)
             if txt:
                 curr, val = parse_money(txt)
-                if buyin_currency:
-                    if curr == buyin_currency:
-                        prize_amount = val
-                        total_prizes[curr] = total_prizes.get(curr, 0.0) + val
-                        break
-                else:
-                    prize_amount += val
+                if buyin_currency and curr == buyin_currency:
+                    prize_amount = val
                     total_prizes[curr] = total_prizes.get(curr, 0.0) + val
-
-        # ROI per tournament
+                    break
+        # ROI calculation
         if buyin_amount > 0:
-            roi_values.append(prize_amount / buyin_amount)
+            roi = prize_amount / buyin_amount
+            overall_roi_values.append(roi)
+            if year:
+                year_roi_values[year].append(roi)
 
-    # 5) Sum ROI
-    roi_sum = round(sum(roi_values), 4)
+    # 6) Compute overall metrics
+    avg_roi_overall = round(sum(overall_roi_values) / total_tournaments, 4) if total_tournaments else 0.0
 
-    # 6) Return structured JSON
+    # 7) Compute yearly stats
+    yearly_stats = []
+    for yr, count in sorted(year_counts.items()):
+        rois = year_roi_values.get(yr, [])
+        avg = round(sum(rois) / count, 4) if count else 0.0
+        yearly_stats.append({
+            "year": int(yr),
+            "tournaments": count,
+            "averageROIByCash": avg
+        })
+
+    # 8) Return structured JSON
     return {
         "player": player,
         "totalTournaments": total_tournaments,
         "totalBuyins": total_buyins,
         "totalPrizes": total_prizes,
-        "roiSum": roi_sum
+        "averageROIByCash": avg_roi_overall,
+        "yearlyStats": yearly_stats
     }
 
 
@@ -118,7 +140,6 @@ def main_route():
     url = data.get("url")
     if not url:
         return jsonify({"error": "Missing 'url'"}), 400
-
     try:
         result = extract_data(url)
         return jsonify(result), 200
