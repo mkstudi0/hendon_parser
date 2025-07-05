@@ -3,5 +3,5 @@
 echo "Installing Playwright browsers..."
 python -m playwright install --with-deps
 
-echo "Starting server..."
+echo "Starting Flask server..."
 python main.py
