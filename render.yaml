@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: hendonmob-parser
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && playwright install
+    startCommand: python main.py
