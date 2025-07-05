@@ -1,151 +1,111 @@
 import os
 import re
-import requests
-from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
+from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
-# Environment variables
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
-SCRAPER_API_URL = "https://api.scraperapi.com"
+def extract_data(url):
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(url, timeout=60000)
+        page.wait_for_selector("h1", timeout=15000)
 
+        # Player's name
+        name = page.locator("h1").inner_text().strip()
 
-def parse_money(text):
-    """
-    Parse a string like '$ 1,500' or '€ 550' and return (currency, amount).
-    """
-    match = re.search(r"([€$])\s*([\d,]+)", text)
-    if not match:
-        return None, 0.0
-    symbol, number = match.groups()
-    amount = float(number.replace(",", ""))
-    currency = "USD" if symbol == "$" else "EUR"
-    return currency, amount
+        # Total tournaments (offline only counted below)
+        total_buyins = {}
+        total_prizes = {}
+        roi_values = []
+        stats_by_year = {}
 
+        # Iterate through all result rows
+        rows = page.locator("table.table--player-results tbody tr")
+        for i in range(rows.count()):
+            row = rows.nth(i)
+            text = row.inner_text()
+            # Exclude online events
+            if "Online" in text:
+                continue
 
-def extract_data(player_url):
-    # 1) Fetch page via Scraper API
-    params = {"api_key": SCRAPER_API_KEY, "url": player_url}
-    response = requests.get(SCRAPER_API_URL, params=params, timeout=30)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
+            # Parse buy-in (may have "+")
+            event_text = row.locator("td.event_name").inner_text()
+            m = re.search(r'([€$A-Za-z]\s?[\d,]+(?:\s*\+\s*[€$A-Za-z]\s?[\d,]+)?)', event_text)
+            if not m:
+                continue
+            raw_buyin = m.group(1)
+            currency = raw_buyin.strip()[0]
+            parts = [int(x.replace(currency, "").replace(" ", "").replace(",", "")) 
+                     for x in raw_buyin.split("+")]
+            buyin_amount = sum(parts)
 
-    # 2) Player name
-    title_text = soup.title.string or ""
-    player = title_text.split(":", 1)[0].strip()
+            # Parse prize (last currency cell)
+            prize_text = row.locator("td.currency").last.inner_text().strip()
+            prize_currency = prize_text[0]
+            prize_amount = int(prize_text.replace(prize_currency, "").replace(" ", "").replace(",", ""))
 
-    # 3) Collect rows for offline tournaments only
-    rows = soup.select("table.table--player-results tbody tr")
-    offline_rows = [r for r in rows if (ev := r.select_one("td.event_name")) and "Online" not in ev.get_text()]
-    total_tournaments = len(offline_rows)
+            # Accumulate buyins/prizes in matching currency
+            total_buyins.setdefault(currency, 0)
+            total_buyins[currency] += buyin_amount
+            if prize_currency == currency:
+                total_prizes.setdefault(currency, 0)
+                total_prizes[currency] += prize_amount
 
-    # 4) Prepare accumulators
-    total_buyins = {}
-    total_prizes = {}
-    overall_roi_values = []
-    year_counts = {}
-    year_roi_values = {}
-
-    # 5) Process each offline tournament
-    for row in offline_rows:
-        # Extract year
-        year = None
-        if (date_td := row.select_one("td.date")) and (m_year := re.search(r"(\d{4})", date_td.get_text())):
-            year = m_year.group(1)
-            year_counts[year] = year_counts.get(year, 0) + 1
-            year_roi_values.setdefault(year, [])
-
-        # BUY-IN parsing
-        buyin_amount = 0.0
-        buyin_currency = None
-        for a in row.select("td.event_name a"):
-            if not a.find('img'):
-                text = a.get_text().strip()
-                if (match := re.match(r'^[€$0-9\+,\s]+', text)):
-                    part = match.group(0)
-                    nums = re.findall(r'[0-9][0-9,]*', part)
-                    total_val = sum(float(n.replace(',', '')) for n in nums)
-                    if part.startswith('$'):
-                        curr = 'USD'
-                    elif part.startswith('€'):
-                        curr = 'EUR'
-                    else:
-                        curr = None
-                    if curr:
-                        buyin_amount = total_val
-                        buyin_currency = curr
-                        total_buyins[curr] = total_buyins.get(curr, 0.0) + total_val
-                break
-
-        # PRIZE parsing
-        prize_amount = 0.0
-        for cell in row.select("td.currency"):
-            txt = cell.get_text(strip=True)
-            if txt:
-                curr, val = parse_money(txt)
-                if buyin_currency and curr == buyin_currency:
-                    prize_amount = val
-                    total_prizes[curr] = total_prizes.get(curr, 0.0) + val
-                    break
-
-        # ROI calculation
-        if buyin_amount > 0:
+            # ROI for this event
             roi = prize_amount / buyin_amount
-            overall_roi_values.append(roi)
-            if year:
-                year_roi_values[year].append(roi)
+            roi_values.append(roi)
 
-    # 6) Compute overall average ROI
-    average_roi = round(sum(overall_roi_values) / total_tournaments, 4) if total_tournaments else 0.0
+            # Group by year
+            date_text = row.locator("td.date").inner_text().strip()
+            year = int(date_text.split("-")[-1])
+            stats_by_year.setdefault(year, []).append(roi)
 
-    # 7) Compute yearly stats sorted descending by year
-    yearly_stats = []
-    for yr, count in sorted(year_counts.items(), key=lambda x: int(x[0]), reverse=True):
-        rois = year_roi_values.get(yr, [])
-        avg = round(sum(rois) / count, 4) if count else 0.0
-        yearly_stats.append({
-            "year": int(yr),
-            "tournaments": count,
-            "averageROIByCash": avg
-        })
+        # Calculate overall average ROI
+        average_roi = round(sum(roi_values) / len(roi_values), 4) if roi_values else 0.0
 
-    # 8) Build multi-line yearly text
-    yearly_text_lines = [f"{s['year']}: {s['tournaments']} tournaments, avg ROI {s['averageROIByCash']}" for s in yearly_stats]
-    yearly_text = "\n".join(yearly_text_lines)
+        # Build yearlyStatsText (reverse chronological)
+        yearly_stats_text = "\n".join(
+            f"{yr}: {len(vals)} tournaments, avg ROI {round(sum(vals)/len(vals), 4)}"
+            for yr, vals in sorted(stats_by_year.items(), reverse=True)
+        )
 
-    # 9) Build dynamic buy-ins text for any currency
-    buyins_text_lines = [f"{cur}: {amt}" for cur, amt in total_buyins.items()]
-    buyins_text = "\n".join(buyins_text_lines)
+        # Build buy-ins and prizes text lists
+        buyins_text = "\n".join(
+            f"{cur} {amt:,}" for cur, amt in sorted(total_buyins.items())
+        )
+        prizes_text = "\n".join(
+            f"{cur} {amt:,}" for cur, amt in sorted(total_prizes.items())
+        )
 
-    # 10) Return structured JSON with textual fields
-    return {
-        "player": player,
-        "totalTournaments": total_tournaments,
-        "totalBuyins": total_buyins,
-        "totalPrizes": total_prizes,
-        "averageROIByCash": average_roi,
-        "yearlyStats": yearly_stats,
-        "yearlyStatsText": yearly_text,
-        "buyinsText": buyins_text
-    }
+        browser.close()
 
+        return {
+            "player": name,
+            "totalTournaments": sum(len(vals) for vals in stats_by_year.values()),
+            "totalBuyins": total_buyins,
+            "totalBuyinsText": buyins_text,
+            "totalPrizes": total_prizes,
+            "totalPrizesText": prizes_text,
+            "averageROIByCash": average_roi,
+            "yearlyStatsText": yearly_stats_text
+        }
 
 @app.route("/", methods=["POST"])
-def main_route():
-    data = request.get_json(force=True) or {}
+def main():
+    data = request.get_json() or {}
     url = data.get("url")
     if not url:
-        return jsonify({"error": "Missing 'url'"}), 400
+        return jsonify({"error": "Missing 'url' parameter"}), 400
     try:
         result = extract_data(url)
-        return jsonify(result), 200
+        return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=port)
 
 
