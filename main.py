@@ -47,30 +47,45 @@ def extract_data(player_url):
     roi_values = []
 
     for row in offline_rows:
-        # BUY-IN: find the event link without <img>
-        buyin_amount = 0.0
-        buyin_currency = None
-        links = row.select("td.event_name a")
+        # BUY-IN: extract numeric parts (including parts without currency symbol)
         event_link = None
-        for a in links:
+        for a in row.select("td.event_name a"):
             if not a.find('img'):
                 event_link = a
                 break
+
+        buyin_amount = 0.0
+        buyin_currency = None
         if event_link:
-            parts = re.findall(r"[€$]\s*[\d,]+", event_link.get_text())
-            for part in parts:
-                curr, val = parse_money(part)
-                if curr:
-                    buyin_amount += val
-                    total_buyins[curr] = total_buyins.get(curr, 0.0) + val
+            text = event_link.get_text().strip()
+            # Determine currency symbol from start
+            if text.startswith('$'):
+                symbol = '$'
+            elif text.startswith('€'):
+                symbol = '€'
+            else:
+                symbol = None
+
+            # Extract only the leading part containing currency, digits, plus, commas
+            m = re.match(r'^[€$0-9\+,\s]+', text)
+            if m:
+                part = m.group(0)
+                # Find all numeric values
+                nums = re.findall(r'[0-9][0-9,]*', part)
+                # Sum them, stripping commas
+                total_val = sum(float(n.replace(',', '')) for n in nums)
+                buyin_amount = total_val
+                if symbol:
+                    curr = 'USD' if symbol == '$' else 'EUR'
+                    total_buyins[curr] = total_buyins.get(curr, 0.0) + buyin_amount
                     buyin_currency = curr
 
-        # PRIZE
+        # PRIZE: match same currency as buy-in
         prize_amount = 0.0
         for cell in row.select("td.currency"):
-            text = cell.get_text(strip=True)
-            if text:
-                curr, val = parse_money(text)
+            txt = cell.get_text(strip=True)
+            if txt:
+                curr, val = parse_money(txt)
                 if buyin_currency:
                     if curr == buyin_currency:
                         prize_amount = val
@@ -81,7 +96,7 @@ def extract_data(player_url):
                     total_prizes[curr] = total_prizes.get(curr, 0.0) + val
 
         # ROI per tournament
-        if buyin_amount > 0.0:
+        if buyin_amount > 0:
             roi_values.append(prize_amount / buyin_amount)
 
     # 5) Sum ROI
