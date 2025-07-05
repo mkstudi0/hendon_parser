@@ -51,10 +51,8 @@ def extract_data(player_url):
     for row in offline_rows:
         # Extract year
         year = None
-        if (date_td := row.select_one("td.date")):
-            if (m_year := re.search(r"(\d{4})", date_td.get_text())):
-                year = m_year.group(1)
-        if year:
+        if (date_td := row.select_one("td.date")) and (m_year := re.search(r"(\d{4})", date_td.get_text())):
+            year = m_year.group(1)
             year_counts[year] = year_counts.get(year, 0) + 1
             year_roi_values.setdefault(year, [])
 
@@ -116,7 +114,11 @@ def extract_data(player_url):
     yearly_text_lines = [f"{s['year']}: {s['tournaments']} tournaments, avg ROI {s['averageROIByCash']}" for s in yearly_stats]
     yearly_text = "\n".join(yearly_text_lines)
 
-    # 9) Return structured JSON with yearly text
+    # 9) Build dynamic buy-ins text for any currency
+    buyins_text_lines = [f"{cur}: {amt}" for cur, amt in total_buyins.items()]
+    buyins_text = "\n".join(buyins_text_lines)
+
+    # 10) Return structured JSON with textual fields
     return {
         "player": player,
         "totalTournaments": total_tournaments,
@@ -124,7 +126,8 @@ def extract_data(player_url):
         "totalPrizes": total_prizes,
         "averageROIByCash": average_roi,
         "yearlyStats": yearly_stats,
-        "yearlyStatsText": yearly_text
+        "yearlyStatsText": yearly_text,
+        "buyinsText": buyins_text
     }
 
 
@@ -144,6 +147,7 @@ def main_route():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
