@@ -3,5 +3,7 @@ services:
     name: hendonmob-parser
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt && playwright install
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m playwright install --with-deps
     startCommand: python main.py
