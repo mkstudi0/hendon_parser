@@ -60,7 +60,6 @@ def extract_data(player_url):
             m_year = re.search(r"(\d{4})", date_td.get_text())
             if m_year:
                 year = m_year.group(1)
-        # Initialize year stats
         if year:
             year_counts[year] = year_counts.get(year, 0) + 1
             year_roi_values.setdefault(year, [])
@@ -68,18 +67,14 @@ def extract_data(player_url):
         # BUY-IN parsing
         buyin_amount = 0.0
         buyin_currency = None
-        # Find event link (text-only)
         for a in row.select("td.event_name a"):
             if not a.find('img'):
                 text = a.get_text().strip()
-                # Get leading part
                 match = re.match(r'^[€$0-9\+,\s]+', text)
                 if match:
                     part = match.group(0)
-                    # sum all numbers
                     nums = re.findall(r'[0-9][0-9,]*', part)
                     total_val = sum(float(n.replace(',', '')) for n in nums)
-                    # currency from symbol
                     if part.startswith('$'):
                         curr = 'USD'
                     elif part.startswith('€'):
@@ -102,6 +97,7 @@ def extract_data(player_url):
                     prize_amount = val
                     total_prizes[curr] = total_prizes.get(curr, 0.0) + val
                     break
+
         # ROI calculation
         if buyin_amount > 0:
             roi = prize_amount / buyin_amount
@@ -109,12 +105,15 @@ def extract_data(player_url):
             if year:
                 year_roi_values[year].append(roi)
 
-    # 6) Compute overall metrics
-    avg_roi_overall = round(sum(overall_roi_values) / total_tournaments, 4) if total_tournaments else 0.0
+    # 6) Compute overall average ROI
+    if total_tournaments > 0:
+        average_roi = round(sum(overall_roi_values) / total_tournaments, 4)
+    else:
+        average_roi = 0.0
 
-    # 7) Compute yearly stats
+    # 7) Compute yearly stats sorted descending by year
     yearly_stats = []
-    for yr, count in sorted(year_counts.items()):
+    for yr, count in sorted(year_counts.items(), key=lambda x: int(x[0]), reverse=True):
         rois = year_roi_values.get(yr, [])
         avg = round(sum(rois) / count, 4) if count else 0.0
         yearly_stats.append({
@@ -129,7 +128,7 @@ def extract_data(player_url):
         "totalTournaments": total_tournaments,
         "totalBuyins": total_buyins,
         "totalPrizes": total_prizes,
-        "averageROIByCash": avg_roi_overall,
+        "averageROIByCash": average_roi,
         "yearlyStats": yearly_stats
     }
 
@@ -150,6 +149,7 @@ def main_route():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
