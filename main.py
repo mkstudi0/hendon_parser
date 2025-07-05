@@ -35,28 +35,27 @@ def extract_data(player_url):
     title_text = soup.title.string or ""
     player = title_text.split(":", 1)[0].strip()
 
-    # 3) Total tournaments from "Results (N)" menu
-    menu = soup.select_one("a.menu_r.current")
-    total_tournaments = 0
-    if menu and menu.text:
-        m = re.search(r"Results\s*\((\d+)\)", menu.text)
-        if m:
-            total_tournaments = int(m.group(1))
+    # 3) Collect rows for offline tournaments only
+    all_rows = soup.select("table.table--player-results tbody tr")
+    offline_rows = [r for r in all_rows
+                    if r.select_one("td.event_name") and "Online" not in r.select_one("td.event_name").get_text()]
+    total_tournaments = len(offline_rows)
 
-    # 4) Select offline tournament rows
-    rows = soup.select("table.table--player-results tbody tr")
-    offline_rows = [r for r in rows if r.select_one("td.event_name") and "Online" not in r.select_one("td.event_name").get_text()]
-
-    # 5) Aggregate buy-ins, prizes, ROI list
+    # 4) Aggregate buy-ins, prizes, ROI list
     total_buyins = {}
     total_prizes = {}
     roi_values = []
 
     for row in offline_rows:
-        # Buy-in extraction
-        event_link = row.select_one("td.event_name a:last-child")
+        # BUY-IN: find the event link without <img>
         buyin_amount = 0.0
         buyin_currency = None
+        links = row.select("td.event_name a")
+        event_link = None
+        for a in links:
+            if not a.find('img'):
+                event_link = a
+                break
         if event_link:
             parts = re.findall(r"[€$]\s*[\d,]+", event_link.get_text())
             for part in parts:
@@ -66,10 +65,9 @@ def extract_data(player_url):
                     total_buyins[curr] = total_buyins.get(curr, 0.0) + val
                     buyin_currency = curr
 
-        # Prize extraction
+        # PRIZE
         prize_amount = 0.0
-        cells = row.select("td.currency")
-        for cell in cells:
+        for cell in row.select("td.currency"):
             text = cell.get_text(strip=True)
             if text:
                 curr, val = parse_money(text)
@@ -82,10 +80,11 @@ def extract_data(player_url):
                     prize_amount += val
                     total_prizes[curr] = total_prizes.get(curr, 0.0) + val
 
-        # ROI calculation per tournament
-        if buyin_amount > 0:
+        # ROI per tournament
+        if buyin_amount > 0.0:
             roi_values.append(prize_amount / buyin_amount)
 
+    # 5) Sum ROI
     roi_sum = round(sum(roi_values), 4)
 
     # 6) Return structured JSON
@@ -115,6 +114,7 @@ def main_route():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
