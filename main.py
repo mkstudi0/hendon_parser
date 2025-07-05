@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify
 from playwright.sync_api import sync_playwright
 
@@ -27,20 +28,19 @@ def extract_data(url):
         }
 
 @app.route("/", methods=["POST"])
-def main():
+def parse_profile():
+    data = request.get_json()
+    if not data or "url" not in data:
+        return jsonify({"error": "Missing 'url' in request"}), 400
     try:
-        data = request.get_json()
-        if not data or "url" not in data:
-            return jsonify({"error": "Missing 'url' in request"}), 400
-
-        url = data["url"]
-        result = extract_data(url)
+        result = extract_data(data["url"])
         return jsonify(result)
-
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-import os
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "OK"}), 200
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
