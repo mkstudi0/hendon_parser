@@ -1,147 +1,132 @@
 import os
 import re
 import requests
-import traceback
 from flask import Flask, request, jsonify
 from bs4 import BeautifulSoup
 from collections import defaultdict
 
 app = Flask(__name__)
 
-# 1) Read API key and fail early if missing
+# Load ScraperAPI key from environment
 SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
 if not SCRAPER_API_KEY:
-    raise RuntimeError("Error: missing SCRAPER_API_KEY environment variable")
+    raise RuntimeError("Please set the SCRAPER_API_KEY environment variable")
 
-SCRAPER_API_URL = "https://api.scraperapi.com"
-
-
-def extract_data(player_url: str) -> dict:
+def fetch_html_via_scraperapi(target_url: str) -> str:
     """
-    Fetches the player profile via ScraperAPI, parses offline tournaments,
-    computes totals and ROI, and returns a structured dict.
+    Fetches the target URL via ScraperAPI with JS rendering enabled.
     """
-    # 2) Fetch HTML via ScraperAPI
-    resp = requests.get(
-        SCRAPER_API_URL,
-        params={
-            "api_key": SCRAPER_API_KEY,
-            "url": player_url,
-            "render": "true"
-        },
-        timeout=60
-    )
+    api_url = "http://api.scraperapi.com/"
+    params = {
+        "api_key": SCRAPER_API_KEY,
+        "url": target_url,
+        "render": "true"
+    }
+    resp = requests.get(api_url, params=params, timeout=60)
     resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "html.parser")
+    return resp.text
 
-    # 3) Extract player name
-    title = soup.title.string or ""
-    player = title.split(":", 1)[0].strip()
+def parse_profile(target_url: str) -> dict:
+    """
+    Parses the player profile at the given URL and returns structured data.
+    """
+    html = fetch_html_via_scraperapi(target_url)
+    soup = BeautifulSoup(html, "html.parser")
 
-    # 4) Select offline tournament rows
+    # 1) Player name
+    name_tag = soup.select_one("h1.player-profile-name")
+    player_name = name_tag.get_text(strip=True) if name_tag else ""
+
+    # 2) Result rows (only offline)
     rows = soup.select("table.table--player-results tbody tr")
-    offline = [r for r in rows if "Online" not in r.get_text()]
-    total_tournaments = len(offline)
 
-    # 5) Accumulators
-    total_buyins = defaultdict(float)
-    total_prizes = defaultdict(float)
-    roi_values = []
-    year_data = defaultdict(lambda: {"count": 0, "roi_sum": 0.0})
+    total_tournaments = 0
+    buyins = defaultdict(float)
+    prizes = defaultdict(float)
+    total_roi = 0.0
+    year_data = defaultdict(lambda: {"tournaments": 0, "roi_sum": 0.0})
 
-    # 6) Parse each row
-    for tr in offline:
-        # a) Year
-        year = None
-        date_td = tr.select_one("td.date")
-        if date_td:
-            m_year = re.search(r"(\d{4})", date_td.get_text())
-            if m_year:
-                year = m_year.group(1)
+    for tr in rows:
+        text = tr.get_text()
+        if "Online" in text:
+            continue  # skip online events
 
-        # b) Buy-in: detect any currency symbol(s) + amounts
+        # Parse buy-in from event_name link text
         event_link = tr.select_one("td.event_name a[href*='event.php']")
         if not event_link:
             continue
-        evt_text = event_link.get_text(strip=True)
-        m_buy = re.search(r"([^\d\+\s,]+)\s*([\d,]+(?:\s*\+\s*[\d,]+)*)", evt_text)
-        if not m_buy:
+        event_text = event_link.get_text(strip=True)
+        m = re.search(r"([€$A-Za-z]{1,3})\s*([\d,]+(?:\s*\+\s*[\d,]+)*)", event_text)
+        if not m:
             continue
-        cur = m_buy.group(1)
-        parts = re.split(r"\+", m_buy.group(2))
-        amounts = [float(p.replace(",", "")) for p in parts]
-        buyin_amt = sum(amounts)
-        total_buyins[cur] += buyin_amt
+        currency = m.group(1)
+        amounts = [int(x.replace(',', '')) for x in m.group(2).split('+')]
+        buyin_amount = sum(amounts)
+        buyins[currency] += buyin_amount
 
-        # c) Prize: find last td.currency and match same currency
+        # Parse prize from last currency cell
         prize_cells = tr.select("td.currency")
-        prize_amt = 0.0
-        for cell in prize_cells[::-1]:
-            txt = cell.get_text(strip=True)
-            m_pr = re.search(rf"({re.escape(cur)})\s*([\d,]+)", txt)
-            if m_pr:
-                prize_amt = float(m_pr.group(2).replace(",", ""))
-                total_prizes[cur] += prize_amt
-                break
+        prize_text_raw = prize_cells[-1].get_text(strip=True) if prize_cells else ""
+        m2 = re.search(rf"{re.escape(currency)}\s*([\d,]+)", prize_text_raw)
+        prize_amount = int(m2.group(1).replace(',', '')) if m2 else 0
+        prizes[currency] += prize_amount
 
-        # d) ROI for this event
-        if buyin_amt > 0:
-            roi = prize_amt / buyin_amt
-            roi_values.append(roi)
+        # ROI and count
+        if buyin_amount > 0:
+            roi = prize_amount / buyin_amount
+            total_roi += roi
+
+            # extract year
+            date_text = tr.select_one("td.date").get_text(strip=True)
+            year = int(date_text.split('-')[-1]) if '-' in date_text else None
             if year:
-                year_data[year]["count"] += 1
+                year_data[year]["tournaments"] += 1
                 year_data[year]["roi_sum"] += roi
 
-    # 7) Compute overall ROI
-    average_roi = round(sum(roi_values) / len(roi_values), 4) if roi_values else 0.0
+        total_tournaments += 1
 
-    # 8) Build dynamic currency text blocks
-    buyins_text = "\n".join(f"{c} {amt:,.0f}" for c, amt in total_buyins.items())
-    prizes_text = "\n".join(f"{c} {amt:,.0f}" for c, amt in total_prizes.items())
+    # Compute overall average ROI
+    average_roi = round(total_roi / total_tournaments, 4) if total_tournaments else 0.0
 
-    # 9) Build yearlyStatsText
+    # Build text for buy-ins and prizes
+    def build_currency_text(data_dict):
+        lines = [f"{cur} {amt:,.0f}" for cur, amt in sorted(data_dict.items())]
+        return "\n".join(lines)
+
+    buyins_text = build_currency_text(buyins)
+    prizes_text = build_currency_text(prizes)
+
+    # Build yearly stats text
     yearly_lines = []
     for yr in sorted(year_data.keys(), reverse=True):
         info = year_data[yr]
-        avg = round(info["roi_sum"] / info["count"], 4) if info["count"] else 0.0
-        yearly_lines.append(f"{yr}: {info['count']} tournaments, avg ROI {avg}")
+        avg = round(info["roi_sum"] / info["tournaments"], 4) if info["tournaments"] else 0.0
+        yearly_lines.append(f"{yr}: {info['tournaments']} tournaments, avg ROI {avg}")
     yearly_stats_text = "\n".join(yearly_lines)
 
-    # 10) Return JSON-ready dict
     return {
-        "player": player,
+        "player": player_name,
         "totalTournaments": total_tournaments,
-        "totalBuyins": total_buyins,
-        "totalPrizes": total_prizes,
+        "totalBuyinsText": buyins_text,
+        "totalPrizesText": prizes_text,
         "averageROIByCash": average_roi,
-        "buyinsText": buyins_text,
-        "prizesText": prizes_text,
         "yearlyStatsText": yearly_stats_text
     }
 
-
 @app.route("/", methods=["POST"])
-def main_route():
-    req = request.get_json(force=True) or {}
-    url = req.get("url")
+def main():
+    payload = request.get_json(force=True)
+    url = payload.get("url")
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
-
     try:
-        result = extract_data(url)
-        return jsonify(result), 200
-
+        data = parse_profile(url)
+        return jsonify(data), 200
     except Exception as e:
-        # print exception message
-        print("!!! Exception in / :", e)
-        # print full traceback to logs
-        traceback.print_exc()
-        # return the error back to client
         return jsonify({"error": str(e)}), 500
 
-
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=port)
 
 
