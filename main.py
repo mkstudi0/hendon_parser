@@ -1,7 +1,6 @@
 import os
 import re
 import requests
-import traceback
 from flask import Flask, request, jsonify
 from bs4 import BeautifulSoup
 from collections import defaultdict
@@ -15,10 +14,9 @@ if not SCRAPER_API_KEY:
 
 API_URL = "http://api.scraperapi.com/"
 
-
 def fetch_html_via_scraperapi(target_url: str) -> str:
     """
-    Fetch the target URL via ScraperAPI with JavaScript rendering enabled.
+    Fetch the target URL via ScraperAPI with JS rendering enabled.
     """
     params = {
         "api_key": SCRAPER_API_KEY,
@@ -29,11 +27,9 @@ def fetch_html_via_scraperapi(target_url: str) -> str:
     resp.raise_for_status()
     return resp.text
 
-
 def parse_profile(target_url: str) -> dict:
     """
-    Parse the player profile at the given URL and return structured data
-    including totals and ROI, with text blocks for currencies and yearly stats.
+    Parses the player profile at the given URL and returns structured data.
     """
     html = fetch_html_via_scraperapi(target_url)
     soup = BeautifulSoup(html, "html.parser")
@@ -61,7 +57,8 @@ def parse_profile(target_url: str) -> dict:
         if not event_link:
             continue
         event_text = event_link.get_text(strip=True)
-        match_buy = re.search(r"([^\d\+\s,]+)\s*([\d,]+(?:\s*\+\s*[\d,]+)*)", event_text)
+        # Automatically capture any currency symbol(s)
+        match_buy = re.search(r"([^\d\s,]+)\s*([\d,]+(?:\s*\+\s*[\d,]+)*)", event_text)
         if not match_buy:
             continue
         currency = match_buy.group(1)
@@ -69,7 +66,7 @@ def parse_profile(target_url: str) -> dict:
         buyin_amount = sum(amounts)
         buyins[currency] += buyin_amount
 
-        # b) Prize parsing from last currency cell
+        # b) Prize parsing from last currency cell (matching same currency)
         currency_cells = tr.select("td.currency")
         prize_amount = 0
         if currency_cells:
@@ -96,28 +93,28 @@ def parse_profile(target_url: str) -> dict:
     # Compute overall average ROI
     average_roi = round(total_roi / total_tournaments, 4) if total_tournaments else 0.0
 
-    # Build currency text for buy-ins and prizes
+    # Build text for buy-ins and prizes
     def build_currency_text(data_dict):
         return "\n".join(f"{cur} {amt:,.0f}" for cur, amt in sorted(data_dict.items()))
 
-    buyins_text = build_currency_text(buyins)
-    prizes_text = build_currency_text(prizes)
+    totalBuyinsText = build_currency_text(buyins)
+    totalPrizesText = build_currency_text(prizes)
 
-    # Build yearly stats text
+    # Build yearlyStatsText only
     yearly_lines = []
-    for year in sorted(year_data.keys(), reverse=True):
-        info = year_data[year]
-        avg_roi_year = round(info["roi_sum"] / info["tournaments"], 4) if info["tournaments"] else 0.0
-        yearly_lines.append(f"{year}: {info['tournaments']} tournaments, avg ROI {avg_roi_year}")
-    yearly_stats_text = "\n".join(yearly_lines)
+    for yr in sorted(year_data.keys(), reverse=True):
+        info = year_data[yr]
+        avg_year_roi = round(info["roi_sum"] / info["tournaments"], 4) if info["tournaments"] else 0.0
+        yearly_lines.append(f"{yr}: {info['tournaments']} tournaments, avg ROI {avg_year_roi}")
+    yearlyStatsText = "\n".join(yearly_lines)
 
     return {
         "player": player_name,
         "totalTournaments": total_tournaments,
-        "totalBuyinsText": buyins_text,
-        "totalPrizesText": prizes_text,
+        "totalBuyinsText": totalBuyinsText,
+        "totalPrizesText": totalPrizesText,
         "averageROIByCash": average_roi,
-        "yearlyStatsText": yearly_stats_text
+        "yearlyStatsText": yearlyStatsText
     }
 
 @app.route("/", methods=["POST"])
