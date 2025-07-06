@@ -1,6 +1,7 @@
 import os
 import re
 import requests
+import traceback
 from flask import Flask, request, jsonify
 from bs4 import BeautifulSoup
 from collections import defaultdict
@@ -125,10 +126,17 @@ def main_route():
     url = req.get("url")
     if not url:
         return jsonify({"error": "Missing 'url' parameter"}), 400
+
     try:
         result = extract_data(url)
         return jsonify(result), 200
+
     except Exception as e:
+        # print exception message
+        print("!!! Exception in / :", e)
+        # print full traceback to logs
+        traceback.print_exc()
+        # return the error back to client
         return jsonify({"error": str(e)}), 500
 
 
