@@ -131,9 +131,13 @@ def extract_data(player_url):
     yearly_text_lines = [f"{s['year']}: {s['tournaments']} tournaments, avg ROI {s['averageROIByCash']}" for s in yearly_stats]
     yearly_text = "\n".join(yearly_text_lines)
 
-    # 9) Build dynamic buy-ins text for any currency
-    buyins_text_lines = [f"{cur}: {amt}" for cur, amt in total_buyins.items()]
-    buyins_text = "\n".join(buyins_text_lines)
+    # 9) Build multi-line text for buy-ins and prizes
+    # Sort by currency symbol for consistent order and format with commas
+    buyins_text_lines = [f"{cur}: {amt:,.2f}" for cur, amt in sorted(total_buyins.items())]
+    total_buyins_text = "\n".join(buyins_text_lines)
+
+    prizes_text_lines = [f"{cur}: {amt:,.2f}" for cur, amt in sorted(total_prizes.items())]
+    total_prizes_text = "\n".join(prizes_text_lines)
 
     # 10) Return structured JSON with textual fields
     return {
