@@ -26,10 +26,29 @@ def parse_money(text):
 
 def extract_data(player_url):
     # 1) Fetch page via Scraper API
-    params = {"api_key": SCRAPER_API_KEY, "url": player_url}
-    response = requests.get(SCRAPER_API_URL, params=params, timeout=30)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")
+import logging
+logging.basicConfig(level=logging.INFO)
+
+params = {"api_key": SCRAPER_API_KEY, "url": player_url}
+try:
+    logging.info(f"Attempting to fetch URL: {player_url}")
+    response = requests.get(SCRAPER_API_URL, params=params, timeout=40)  # Slightly increase the timeout
+    
+    # Check the response code from Scraper API
+    if response.status_code != 200:
+        logging.error(f"Scraper API returned a non-200 status code: {response.status_code}")
+        logging.error(f"Response body: {response.text}")
+        # Create an exception to stop execution and return a 500 error
+        raise Exception(f"Scraper API failed with status {response.status_code}")
+        
+    response.raise_for_status()  # This line will now only check for successful codes (2xx)
+    
+except requests.exceptions.RequestException as e:
+    # This error will occur if there is a network problem or timeout
+    logging.error(f"A request exception occurred: {e}")
+    raise  # Re-raise the error so Flask returns a 500
+
+soup = BeautifulSoup(response.text, "html.parser")
 
     # 2) Player name
     title_text = soup.title.string or ""
