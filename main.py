@@ -13,15 +13,26 @@ SCRAPER_API_URL = "https://api.scraperapi.com"
 
 def parse_money(text):
     """
-    Parse a string like '$ 1,500' or '€ 550' and return (currency, amount).
+    Universal currency parser.
+    Identifies currency symbols like $, C$, NT$, €, etc., and the amount.
     """
-    match = re.search(r"([€$])\s*([\d,]+)", text)
+    if not text:
+        return None, 0.0
+    # \xa0 is a non-breaking space, replace it with a regular space
+    text = text.replace('\xa0', ' ')
+    # Regex to find a currency symbol (one or more non-digit/non-space chars)
+    # followed by a number.
+    match = re.search(r"([^\d\s,.-]+)\s*([\d,.-]+)", text)
     if not match:
         return None, 0.0
-    symbol, number = match.groups()
-    amount = float(number.replace(",", ""))
-    currency = "USD" if symbol == "$" else "EUR"
-    return currency, amount
+    
+    symbol, number_str = match.groups()
+    try:
+        amount = float(number_str.replace(",", ""))
+        # Return the actual symbol found, not a hardcoded value
+        return symbol.strip(), amount
+    except (ValueError, TypeError):
+        return None, 0.0
 
 
 def extract_data(player_url):
@@ -35,20 +46,29 @@ def extract_data(player_url):
     title_text = soup.title.string or ""
     player = title_text.split(":", 1)[0].strip()
 
-    # 3) Collect rows for offline tournaments only
-    rows = soup.select("table.table--player-results tbody tr")
-    offline_rows = [r for r in rows if (ev := r.select_one("td.event_name")) and "Online" not in ev.get_text()]
-    total_tournaments = len(offline_rows)
+    # 3) Collect and filter tournament rows
+    all_rows = soup.select("table.table--player-results tbody tr")
+    
+    # Filter out "Online" tournaments AND tournaments with no prize data
+    valid_rows = []
+    for row in all_rows:
+        has_prize = any(cell.get_text(strip=True) for cell in row.select("td.currency"))
+        is_online = "Online" in (row.select_one("td.event_name").get_text() if row.select_one("td.event_name") else "")
+        
+        if has_prize and not is_online:
+            valid_rows.append(row)
+            
+    total_tournaments = len(valid_rows)
 
     # 4) Prepare accumulators
     total_buyins = {}
     total_prizes = {}
-    overall_roi_values = []
+    individual_roi_list = [] # Use this for the final average ROI
     year_counts = {}
     year_roi_values = {}
 
-    # 5) Process each offline tournament
-    for row in offline_rows:
+    # 5) Process each valid tournament row
+    for row in valid_rows:
         # Extract year
         year = None
         if (date_td := row.select_one("td.date")) and (m_year := re.search(r"(\d{4})", date_td.get_text())):
@@ -56,48 +76,45 @@ def extract_data(player_url):
             year_counts[year] = year_counts.get(year, 0) + 1
             year_roi_values.setdefault(year, [])
 
-        # BUY-IN parsing
+        # --- BUY-IN parsing ---
         buyin_amount = 0.0
         buyin_currency = None
-        for a in row.select("td.event_name a"):
-            if not a.find('img'):
-                text = a.get_text().strip()
-                if (match := re.match(r'^[€$0-9\+,\s]+', text)):
-                    part = match.group(0)
-                    nums = re.findall(r'[0-9][0-9,]*', part)
-                    total_val = sum(float(n.replace(',', '')) for n in nums)
-                    if part.startswith('$'):
-                        curr = 'USD'
-                    elif part.startswith('€'):
-                        curr = 'EUR'
-                    else:
-                        curr = None
-                    if curr:
-                        buyin_amount = total_val
-                        buyin_currency = curr
-                        total_buyins[curr] = total_buyins.get(curr, 0.0) + total_val
-                break
+        event_name_cell = row.select_one("td.event_name a")
+        if event_name_cell:
+            text = event_name_cell.get_text(strip=True)
+            # Use the universal function to identify the currency
+            currency_symbol, _ = parse_money(text)
+            if currency_symbol:
+                # Find all numbers in the string to sum them up (e.g., "1,100 + 100")
+                numbers = re.findall(r'[\d,]+(?:\.\d+)?', text)
+                if numbers:
+                    buyin_amount = sum(float(n.replace(',', '')) for n in numbers)
+                    buyin_currency = currency_symbol
+                    total_buyins[buyin_currency] = total_buyins.get(buyin_currency, 0.0) + buyin_amount
 
-        # PRIZE parsing
-        prize_amount = 0.0
-        for cell in row.select("td.currency"):
-            txt = cell.get_text(strip=True)
-            if txt:
-                curr, val = parse_money(txt)
-                if buyin_currency and curr == buyin_currency:
-                    prize_amount = val
-                    total_prizes[curr] = total_prizes.get(curr, 0.0) + val
-                    break
-
-        # ROI calculation
-        if buyin_amount > 0:
-            roi = prize_amount / buyin_amount
-            overall_roi_values.append(roi)
+        # --- PRIZE parsing ---
+        prize_for_roi = 0.0
+        prize_cells = row.select("td.currency")
+        for cell in prize_cells:
+            # Parse each prize cell
+            curr, val = parse_money(cell.get_text(strip=True))
+            if curr and val > 0:
+                # Add every found prize to the total prize pool
+                total_prizes[curr] = total_prizes.get(curr, 0.0) + val
+                # Check if this prize's currency matches the buy-in currency for ROI calculation
+                if curr == buyin_currency:
+                    prize_for_roi = val
+        
+        # --- ROI calculation ---
+        # Calculate ROI only if there is a buy-in AND a matching prize
+        if buyin_amount > 0 and prize_for_roi > 0:
+            roi = prize_for_roi / buyin_amount
+            individual_roi_list.append(roi)
             if year:
                 year_roi_values[year].append(roi)
 
     # 6) Compute overall average ROI
-    average_roi = round(sum(overall_roi_values) / total_tournaments, 4) if total_tournaments else 0.0
+    average_roi = round(sum(individual_roi_list) / len(individual_roi_list), 4) if individual_roi_list else 0.0
 
     # 7) Compute yearly stats sorted descending by year
     yearly_stats = []
