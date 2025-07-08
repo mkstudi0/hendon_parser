@@ -102,19 +102,30 @@ def extract_data(player_url):
                     total_buyins[buyin_currency] = total_buyins.get(buyin_currency, 0.0) + buyin_amount
 
         prize_for_roi = 0.0
+        
+        # Iterate through all prize cells in the row
         prize_cells = row.select("td.currency")
         for cell in prize_cells:
-            curr, val = parse_money(cell.get_text(strip=True))
-            if curr and val > 0:
-                total_prizes[curr] = total_prizes.get(curr, 0.0) + val
-                if curr == buyin_currency:
-                    prize_for_roi = val
-        
-        if buyin_amount > 0 and prize_for_roi > 0:
-            roi = prize_for_roi / buyin_amount
-            individual_roi_list.append(roi)
-            if year:
-                year_roi_values[year].append(roi)
+            # Parse each potential prize cell
+            prize_currency, prize_value = parse_money(cell.get_text(strip=True))
+            
+            # THE MAIN RULE: We only process the prize if its currency matches the buy-in currency
+            if prize_currency and prize_value > 0 and prize_currency == buyin_currency:
+                # 1. Save this prize for the ROI calculation of this specific tournament
+                prize_for_roi = prize_value
+                
+                # 2. Add this prize to the `total_prizes` grand total
+                total_prizes[prize_currency] = total_prizes.get(prize_currency, 0.0) + prize_for_roi
+                
+                # 3. Calculate the individual ROI for this tournament
+                if buyin_amount > 0:
+                    roi = prize_for_roi / buyin_amount
+                    individual_roi_list.append(roi)
+                    if year:
+                        year_roi_values[year].append(roi)
+                
+                # 4. We have found the correct prize; ignore others in this row
+                break
 
     # 6) Compute overall average ROI
     average_roi = round(sum(individual_roi_list) / len(individual_roi_list), 4) if individual_roi_list else 0.0
@@ -122,8 +133,10 @@ def extract_data(player_url):
     # 7) Compute yearly stats sorted descending by year
     yearly_text_lines = []
     for yr, count in sorted(year_counts.items(), key=lambda x: int(x[0]), reverse=True):
-        rois = year_roi_values.get(yr, [])
-        avg = round(sum(rois) / count, 4) if count else 0.0
+        rois_for_year = year_roi_values.get(yr, [])
+        # Correct calculation: divide sum of ROIs by the number of calculated ROIs, not total tournaments
+        avg = round(sum(rois_for_year) / len(rois_for_year), 4) if rois_for_year else 0.0
+        # `count` is still correctly used here to display the total number of valid tournaments in that year
         yearly_text_lines.append(f"{yr}: {count} tournaments, avg ROI {avg}")
     yearly_text = "\n".join(yearly_text_lines)
 
