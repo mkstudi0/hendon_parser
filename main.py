@@ -10,8 +10,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 app = Flask(__name__)
 
-# Environment variable for ScrapingBee
-SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
+# --- UPDATED FOR ScraperAPI ---
+# Environment variables for ScraperAPI
+SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
+SCRAPER_API_URL = "https://api.scraperapi.com"
 
 def parse_money(text):
     """
@@ -33,23 +35,20 @@ def parse_money(text):
         return None, 0.0
 
 def extract_data(player_url):
-    # 1) Fetch page via ScrapingBee API (Free Tier Test)
-    scrapingbee_endpoint = "https://app.scrapingbee.com/api/v1/"
-    
-    # Parameters for a free tier test.
+    # 1) Fetch page via ScraperAPI (Free Tier Test)
     params = {
-        "api_key": SCRAPINGBEE_API_KEY,
+        "api_key": SCRAPER_API_KEY,
         "url": player_url,
-        # "premium_proxy": "true" has been removed for the free tier test.
+        # "ultra_premium": "true" has been removed for the free tier test.
     }
     
     try:
-        logging.info(f"Attempting to fetch URL with ScrapingBee (Free Tier): {player_url}")
-        response = requests.get(scrapingbee_endpoint, params=params, timeout=120)
+        logging.info(f"Attempting to fetch URL with ScraperAPI (Free Tier): {player_url}")
+        response = requests.get(SCRAPER_API_URL, params=params, timeout=120)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         # This logging is already set up to give us detailed error information.
-        logging.error(f"A request exception occurred with ScrapingBee: {e}")
+        logging.error(f"A request exception occurred with ScraperAPI: {e}")
         if e.response is not None:
             logging.error(f"Response body: {e.response.text}")
         raise
@@ -165,11 +164,5 @@ def main_route():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
-
-
-
-
-
 
 
