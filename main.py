@@ -7,8 +7,7 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # Environment variables
-SCRAPER_API_KEY = os.getenv("SCRAPER_API_KEY")
-SCRAPER_API_URL = "https://api.scraperapi.com"
+SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
 
 
 def parse_money(text):
@@ -36,10 +35,26 @@ def parse_money(text):
 
 
 def extract_data(player_url):
-    # 1) Fetch page via Scraper API
-    params = {"api_key": SCRAPER_API_KEY, "url": player_url}
-    response = requests.get(SCRAPER_API_URL, params=params, timeout=30)
-    response.raise_for_status()
+    # 1) Fetch page via ScrapingBee API
+    scrapingbee_endpoint = "https://app.scrapingbee.com/api/v1/"
+    params = {
+        "api_key": SCRAPINGBEE_API_KEY,
+        "url": player_url,
+    }
+    
+    try:
+        logging.info(f"Attempting to fetch URL via ScrapingBee: {player_url}")
+        # Set a generous timeout for the request
+        response = requests.get(scrapingbee_endpoint, params=params, timeout=120)
+        # Raise an exception for any HTTP error (4xx or 5xx)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logging.error(f"A request exception occurred with ScrapingBee: {e}")
+        # If the request has a response body, log it for more details
+        if e.response is not None:
+            logging.error(f"Response body: {e.response.text}")
+        raise # Re-raise the exception to stop the process
+
     soup = BeautifulSoup(response.text, "html.parser")
 
     # 2) Player name
