@@ -33,21 +33,22 @@ def parse_money(text):
         return None, 0.0
 
 def extract_data(player_url):
-    # 1) Fetch page via ScrapingBee API using PREMIUM proxies
+    # 1) Fetch page via ScrapingBee API (Free Tier Test)
     scrapingbee_endpoint = "https://app.scrapingbee.com/api/v1/"
     
-    # This parameter will only work on a paid plan.
+    # Parameters for a free tier test.
     params = {
         "api_key": SCRAPINGBEE_API_KEY,
         "url": player_url,
-        "premium_proxy": "true",  # This requires a paid subscription
+        # "premium_proxy": "true" has been removed for the free tier test.
     }
     
     try:
-        logging.info(f"Attempting to fetch URL with ScrapingBee premium proxies: {player_url}")
+        logging.info(f"Attempting to fetch URL with ScrapingBee (Free Tier): {player_url}")
         response = requests.get(scrapingbee_endpoint, params=params, timeout=120)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
+        # This logging is already set up to give us detailed error information.
         logging.error(f"A request exception occurred with ScrapingBee: {e}")
         if e.response is not None:
             logging.error(f"Response body: {e.response.text}")
