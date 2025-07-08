@@ -35,19 +35,19 @@ def parse_money(text):
         return None, 0.0
 
 def extract_data(player_url):
-    # 1) Fetch page via ScraperAPI (Free Tier Test)
+    # 1) Fetch page via ScraperAPI using ULTRA PREMIUM proxies
+    # This section is configured for a paid plan.
     params = {
         "api_key": SCRAPER_API_KEY,
         "url": player_url,
-        # "ultra_premium": "true" has been removed for the free tier test.
+        "ultra_premium": "true",  # This requires a paid subscription for difficult sites
     }
     
     try:
-        logging.info(f"Attempting to fetch URL with ScraperAPI (Free Tier): {player_url}")
+        logging.info(f"Attempting to fetch URL with ScraperAPI ultra premium proxies: {player_url}")
         response = requests.get(SCRAPER_API_URL, params=params, timeout=120)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        # This logging is already set up to give us detailed error information.
         logging.error(f"A request exception occurred with ScraperAPI: {e}")
         if e.response is not None:
             logging.error(f"Response body: {e.response.text}")
@@ -88,6 +88,7 @@ def extract_data(player_url):
             year_counts[year] = year_counts.get(year, 0) + 1
             year_roi_values.setdefault(year, [])
 
+        # --- BUY-IN parsing ---
         buyin_amount = 0.0
         buyin_currency = None
         event_name_cell = row.select_one("td.event_name a")
@@ -101,30 +102,24 @@ def extract_data(player_url):
                     buyin_currency = currency_symbol
                     total_buyins[buyin_currency] = total_buyins.get(buyin_currency, 0.0) + buyin_amount
 
+        # --- PRIZE parsing & ROI Calculation (Corrected Logic) ---
         prize_for_roi = 0.0
         
-        # Iterate through all prize cells in the row
         prize_cells = row.select("td.currency")
         for cell in prize_cells:
-            # Parse each potential prize cell
             prize_currency, prize_value = parse_money(cell.get_text(strip=True))
             
-            # THE MAIN RULE: We only process the prize if its currency matches the buy-in currency
             if prize_currency and prize_value > 0 and prize_currency == buyin_currency:
-                # 1. Save this prize for the ROI calculation of this specific tournament
                 prize_for_roi = prize_value
                 
-                # 2. Add this prize to the `total_prizes` grand total
                 total_prizes[prize_currency] = total_prizes.get(prize_currency, 0.0) + prize_for_roi
                 
-                # 3. Calculate the individual ROI for this tournament
                 if buyin_amount > 0:
                     roi = prize_for_roi / buyin_amount
                     individual_roi_list.append(roi)
                     if year:
                         year_roi_values[year].append(roi)
                 
-                # 4. We have found the correct prize; ignore others in this row
                 break
 
     # 6) Compute overall average ROI
@@ -134,9 +129,7 @@ def extract_data(player_url):
     yearly_text_lines = []
     for yr, count in sorted(year_counts.items(), key=lambda x: int(x[0]), reverse=True):
         rois_for_year = year_roi_values.get(yr, [])
-        # Correct calculation: divide sum of ROIs by the number of calculated ROIs, not total tournaments
         avg = round(sum(rois_for_year) / len(rois_for_year), 4) if rois_for_year else 0.0
-        # `count` is still correctly used here to display the total number of valid tournaments in that year
         yearly_text_lines.append(f"{yr}: {count} tournaments, avg ROI {avg}")
     yearly_text = "\n".join(yearly_text_lines)
 
