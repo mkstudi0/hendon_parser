@@ -10,8 +10,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 app = Flask(__name__)
 
-# Environment variable for ScrapingBee
-SCRAPINGBEE_API_KEY = os.getenv("SCRAPINGBEE_API_KEY")
+# --- UPDATED FOR BRIGHT DATA ---
+# Read the credentials from Render's Environment Variables
+BRIGHTDATA_HOST = os.getenv("BRIGHTDATA_HOST")
+BRIGHTDATA_PORT = os.getenv("BRIGHTDATA_PORT")
+BRIGHTDATA_USERNAME = os.getenv("BRIGHTDATA_USERNAME")
+BRIGHTDATA_PASSWORD = os.getenv("BRIGHTDATA_PASSWORD")
 
 def parse_money(text):
     """
@@ -33,21 +37,24 @@ def parse_money(text):
         return None, 0.0
 
 def extract_data(player_url):
-    # 1) Fetch page via ScrapingBee API
-    scrapingbee_endpoint = "https://app.scrapingbee.com/api/v1/"
-    params = {
-        "api_key": SCRAPINGBEE_API_KEY,
-        "url": player_url,
-    }
+    # --- UPDATED FOR BRIGHT DATA ---
+    # 1) Fetch page via Bright Data Residential Proxies
+    if not all([BRIGHTDATA_HOST, BRIGHTDATA_PORT, BRIGHTDATA_USERNAME, BRIGHTDATA_PASSWORD]):
+        raise ValueError("Bright Data credentials are not set in the environment variables.")
+
+    proxy_url = (
+        f"http://{BRIGHTDATA_USERNAME}:{BRIGHTDATA_PASSWORD}@"
+        f"{BRIGHTDATA_HOST}:{BRIGHTDATA_PORT}"
+    )
+    proxies = {"http": proxy_url, "https": proxy_url}
     
     try:
-        logging.info(f"Attempting to fetch URL via ScrapingBee: {player_url}")
-        response = requests.get(scrapingbee_endpoint, params=params, timeout=120)
+        logging.info(f"Attempting to fetch URL via Bright Data: {player_url}")
+        # Make the request through the configured proxy, disable SSL verification for the proxy
+        response = requests.get(player_url, proxies=proxies, verify=False, timeout=120)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        logging.error(f"A request exception occurred with ScrapingBee: {e}")
-        if e.response is not None:
-            logging.error(f"Response body: {e.response.text}")
+        logging.error(f"A request exception occurred with Bright Data: {e}")
         raise
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -143,10 +150,6 @@ def extract_data(player_url):
 
 @app.route("/", methods=["POST"])
 def main_route():
-    """
-    This is the main entry point for requests.
-    It now has enhanced error logging to catch any potential issue.
-    """
     try:
         data = request.get_json(force=True) or {}
         url = data.get("url")
@@ -159,13 +162,13 @@ def main_route():
         return jsonify(result), 200
     
     except Exception as e:
-        # This is a global catch-all to make sure we log EVERY error with its full traceback.
         logging.error(f"A critical error occurred in main_route: {e}", exc_info=True)
         return jsonify({"error": "An internal server error occurred. See logs for details."}), 500
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
