@@ -66,7 +66,14 @@ def extract_data(player_url):
     valid_rows = []
     for row in all_rows:
         has_prize = any(cell.get_text(strip=True) for cell in row.select("td.currency"))
-        is_online = "Online" in (row.select_one("td.event_name").get_text() if row.select_one("td.event_name") else "")
+        # get the event name text (or empty string if missing)
+event_text = (
+    row.select_one("td.event_name").get_text()
+    if row.select_one("td.event_name") else ""
+)
+# filter out any online tournaments regardless of case
+is_online = "online" in event_text.lower()
+
         
         if has_prize and not is_online:
             valid_rows.append(row)
@@ -88,39 +95,42 @@ def extract_data(player_url):
             year_counts[year] = year_counts.get(year, 0) + 1
             year_roi_values.setdefault(year, [])
 
-        # --- BUY-IN parsing ---
-        buyin_amount = 0.0
-        buyin_currency = None
-        event_name_cell = row.select_one("td.event_name a")
-        if event_name_cell:
-            text = event_name_cell.get_text(strip=True)
-            currency_symbol, _ = parse_money(text)
-            if currency_symbol:
-                numbers = re.findall(r'[\d,]+(?:\.\d+)?', text)
-                if numbers:
-                    buyin_amount = sum(float(n.replace(',', '')) for n in numbers)
-                    buyin_currency = currency_symbol
-                    total_buyins[buyin_currency] = total_buyins.get(buyin_currency, 0.0) + buyin_amount
+       # --- BUY-IN parsing ---
+buyin_amount = 0.0
+buyin_currency = None
 
-        # --- PRIZE parsing & ROI Calculation (Corrected Logic) ---
-        prize_for_roi = 0.0
-        
-        prize_cells = row.select("td.currency")
-        for cell in prize_cells:
-            prize_currency, prize_value = parse_money(cell.get_text(strip=True))
-            
-            if prize_currency and prize_value > 0 and prize_currency == buyin_currency:
-                prize_for_roi = prize_value
-                
-                total_prizes[prize_currency] = total_prizes.get(prize_currency, 0.0) + prize_for_roi
-                
-                if buyin_amount > 0:
-                    roi = prize_for_roi / buyin_amount
-                    individual_roi_list.append(roi)
-                    if year:
-                        year_roi_values[year].append(roi)
-                
-                break
+# select the event link that contains the buy-in info
+event_link = row.select_one("td.event_name a[href*='event.php']")
+if event_link:
+    text = event_link.get_text(strip=True)
+    currency_symbol, _ = parse_money(text)
+    if currency_symbol:
+        # extract only the first two numeric groups (ignore any extras)
+        raw_numbers = re.findall(r'[\d,]+(?:\.\d+)?', text)
+        numbers = raw_numbers[:2]
+        if numbers:
+            buyin_amount = sum(float(n.replace(',', '')) for n in numbers)
+            buyin_currency = currency_symbol
+            total_buyins[buyin_currency] = total_buyins.get(buyin_currency, 0.0) + buyin_amount
+
+
+
+        # --- PRIZE parsing & ROI calculation ---
+prize_for_roi = 0.0
+prize_cells = row.select("td.currency")
+for cell in prize_cells:
+    prize_currency, prize_value = parse_money(cell.get_text(strip=True))
+    # only consider prizes in the same currency as the buy-in and positive values
+    if prize_currency == buyin_currency and prize_value > 0:
+        prize_for_roi = prize_value
+        total_prizes[prize_currency] = total_prizes.get(prize_currency, 0.0) + prize_for_roi
+        if buyin_amount > 0:
+            roi = prize_for_roi / buyin_amount
+            individual_roi_list.append(roi)
+            if year:
+                year_roi_values.setdefault(year, []).append(roi)
+        break  # stop after first matching currency
+
 
     # 6) Compute overall average ROI
     average_roi = round(sum(individual_roi_list) / len(individual_roi_list), 4) if individual_roi_list else 0.0
